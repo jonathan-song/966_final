@@ -1,0 +1,117 @@
+// Each row is a food
+// Entries in rows are saliva sharing risks of the three actions associated with each food
+var scenarios = [
+  {'low': 2.2, 'mid': 5.7, 'high': 6.7}, 
+  {'low': 1.6, 'mid': 4.8, 'high': 6.3}, 
+  {'low': 1, 'mid': 5.5, 'high': 6.1}, 
+  {'low': 1.1, 'mid': 5.8, 'high': 6.6}, 
+  {'low': 2.1, 'mid': 5.3, 'high': 6}, 
+  {'low': 1.8, 'mid': 5.8, 'high': 6.7}, 
+  {'low': 2.3, 'mid': 5, 'high': 6.5}, 
+  {'low': 1.2, 'mid': 4.7, 'high': 6.7}, 
+  {'low': 1.8, 'mid': 6, 'high': 7}, 
+  {'low': 1.9, 'mid': 5.3, 'high': 7}
+];
+
+// Closeness is an integer 1 to 4, 1 being lowest and 4 being higher
+var makeUtility = function(closeness){
+  if(closeness == 1){
+    return function(risk){return 5.2 - 0.45 * (risk - 1)};
+  }else if(closeness == 2){
+    return function(risk){return 6 - 0.35 * (risk - 1)};
+  }else if(closeness == 3){
+    return function(risk){return 6.2 - 0.25 * (risk - 1)};
+  }else if(closeness == 4){
+    return function(risk){return 6.1 - 0.05 * (risk - 1)};
+  }
+}
+
+var actor = function(scenario, closeness, beta){
+  let actions = Object.keys(scenario)
+  let risks = Object.values(scenario)
+  let utility = makeUtility(closeness);
+  let exp_comforts = map(function(x){return Math.exp(beta * utility(x))}, risks); 
+  let sum_exp_comforts = sum(exp_comforts);
+  let softmaxes = map(function(x){return x / sum_exp_comforts}, exp_comforts);
+  
+  return Categorical({ps: softmaxes, vs: actions})
+}
+
+editor.put("makeUtility", makeUtility)
+editor.put("scenarios", scenarios)
+editor.put("actor", actor)
+
+var scenarios = editor.get("scenarios")
+var actor = editor.get("actor")
+
+var makeReceiverModel = function(scenario, beta, f){return function(){
+  var cs = Categorical({ps: [0.25, 0.25, 0.25, 0.25], vs: [1, 2, 3, 4]})
+  var closeness = sample(cs)
+  var actions_probs = actor(scenario, closeness, beta)
+  f(closeness, actions_probs)
+}}
+    
+var dist = Infer({method: "enumerate"}, makeReceiverModel(scenarios[0], 1.8, function(closeness, actions_probs){
+  condition(sample(actions_probs) == "mid")
+  return closeness
+}));
+
+print(dist)
+
+viz(dist, {xLabel: "Closeness", yLabel: "P(Closeness | Action = Mid)"})
+
+editor.put("makeReceiverModel", makeReceiverModel)
+
+var actor = editor.get("actor")
+var makeUtility = editor.get("makeUtility")
+var makeReceiverModel = editor.get("makeReceiverModel")
+
+var getReceiverDist = function(scenario, observed, beta){
+  return Infer({method: "enumerate"}, makeReceiverModel(scenario, beta, function(closeness, actions_probs){
+    condition(sample(actions_probs) == observed)
+    return closeness
+  }));
+}
+
+var commActor = function(alpha, beta, scenario, closeness, unavailable){
+  var unavailableRisk = scenario[unavailable];
+  
+  // Add code to remove unavailable action from scenario
+
+  var actions = Object.keys(available)
+  var risks = Object.values(available)
+  var comfortUtility = makeUtility(closeness);
+  
+  var utilities = map(function(action){  
+    var receiverDist = getReceiverDist(availableRisks, action, beta);
+    return alpha * receiverDist.score(closeness) + comfortUtility(availableRisks[action]);
+  }, actions); 
+  
+  var exp_utilities = map(function(x){return Math.exp(beta * x)}, utilities)
+  var denominator = sum(exp_utilities) + Math.exp(beta * comfortUtility(unavailableRisk))
+  
+  var softMaxes = map(function(x){return x / denominator}, exp_utilities)
+  
+  return Categorical({ps: softMaxes, vs: actions})
+}
+
+print(commActor(1, 1, scenarios[0], 3, "mid"))
+
+editor.put("commActor", commActor)
+
+var scenarios = editor.get("scenarios")
+var commActor = editor.get("commActor")
+
+var makeCommReceiverModel = function(risks, alpha, beta, unavailable, f){return function(){
+  var cs = Categorical({ps: [0.25, 0.25, 0.25, 0.25], vs: [1, 2, 3, 4]})
+  var closeness = sample(cs)
+  var actions_probs = commActor(alpha, beta, risks, closeness, unavailable)
+  f(closeness, actions_probs)
+}}
+
+var dist = Infer({method: "enumerate"}, makeCommReceiverModel(scenarios[0], 0.9, 1.2, 0, function(closeness, actions_probs){
+  condition(sample(actions_probs) == 1)
+  return closeness
+}));
+
+viz(dist, {xLabel: "Closeness", yLabel: "P(Closeness | Action = 1)"})
