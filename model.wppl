@@ -1,16 +1,16 @@
 // Each row is a food
 // Entries in rows are saliva sharing risks of the three actions associated with each food
 var scenarios = [
-  {'low': 2.2, 'mid': 5.7, 'high': 6.7}, 
-  {'low': 1.6, 'mid': 4.8, 'high': 6.3}, 
-  {'low': 1, 'mid': 5.5, 'high': 6.1}, 
-  {'low': 1.1, 'mid': 5.8, 'high': 6.6}, 
-  {'low': 2.1, 'mid': 5.3, 'high': 6}, 
-  {'low': 1.8, 'mid': 5.8, 'high': 6.7}, 
-  {'low': 2.3, 'mid': 5, 'high': 6.5}, 
-  {'low': 1.2, 'mid': 4.7, 'high': 6.7}, 
-  {'low': 1.8, 'mid': 6, 'high': 7}, 
-  {'low': 1.9, 'mid': 5.3, 'high': 7}
+  [2.2, 5.7, 6.7], 
+  [1.6, 4.8, 6.3], 
+  [1.0, 5.5, 6.1], 
+  [1.1, 5.8, 6.6], 
+  [2.1, 5.3, 6.0], 
+  [1.8, 5.8, 6.7], 
+  [2.3, 5.0, 6.5], 
+  [1.2, 4.7, 6.7], 
+  [1.8, 6.0, 7.0], 
+  [1.9, 5.3, 7.0]
 ];
 
 // Closeness is an integer 1 to 4, 1 being lowest and 4 being higher
@@ -26,9 +26,9 @@ var makeUtility = function(closeness){
   }
 }
 
-var actor = function(scenario, closeness, beta){
-  let actions = Object.keys(scenario)
-  let risks = Object.values(scenario)
+// Rational choice actor model; Returns RC actor actions distribution
+var actor = function(risks, closeness, beta){
+  let actions = _.range(risks.length)
   let utility = makeUtility(closeness);
   let exp_comforts = map(function(x){return Math.exp(beta * utility(x))}, risks); 
   let sum_exp_comforts = sum(exp_comforts);
@@ -37,54 +37,33 @@ var actor = function(scenario, closeness, beta){
   return Categorical({ps: softmaxes, vs: actions})
 }
 
-editor.put("makeUtility", makeUtility)
-editor.put("scenarios", scenarios)
-editor.put("actor", actor)
-
-var scenarios = editor.get("scenarios")
-var actor = editor.get("actor")
-
-var makeReceiverModel = function(scenario, beta, f){return function(){
+// Make a RCSA Receiver Model with given parameters
+var makeReceiverModel = function(risks, beta, f){return function(){
   var cs = Categorical({ps: [0.25, 0.25, 0.25, 0.25], vs: [1, 2, 3, 4]})
   var closeness = sample(cs)
-  var actions_probs = actor(scenario, closeness, beta)
+  var actions_probs = actor(risks, closeness, beta)
   f(closeness, actions_probs)
 }}
-    
-var dist = Infer({method: "enumerate"}, makeReceiverModel(scenarios[0], 1.8, function(closeness, actions_probs){
-  condition(sample(actions_probs) == "mid")
-  return closeness
-}));
 
-print(dist)
-
-viz(dist, {xLabel: "Closeness", yLabel: "P(Closeness | Action = Mid)"})
-
-editor.put("makeReceiverModel", makeReceiverModel)
-
-var actor = editor.get("actor")
-var makeUtility = editor.get("makeUtility")
-var makeReceiverModel = editor.get("makeReceiverModel")
-
-var getReceiverDist = function(scenario, observed, beta){
-  return Infer({method: "enumerate"}, makeReceiverModel(scenario, beta, function(closeness, actions_probs){
+// Get an RCSA Receiver Distribution with given parameters
+var getReceiverDist = function(risks, observed, beta){
+  return Infer({method: "enumerate"}, makeReceiverModel(risks, beta, function(closeness, actions_probs){
     condition(sample(actions_probs) == observed)
     return closeness
   }));
 }
 
-var commActor = function(alpha, beta, scenario, closeness, unavailable){
-  var unavailableRisk = scenario[unavailable];
+// Communicative Actor Model; rBeta is the beta parameter for the rational choice receiver model used
+var commActor = function(alpha, beta, rBeta, risks, closeness, unavailable){
+  var unavailableRisk = risks[unavailable];
+  var available = risks.slice(0, unavailable).concat(risks.slice(unavailable + 1))
+  var actions = _.range(available.length)
   
-  // Add code to remove unavailable action from scenario
-
-  var actions = Object.keys(available)
-  var risks = Object.values(available)
   var comfortUtility = makeUtility(closeness);
   
   var utilities = map(function(action){  
-    var receiverDist = getReceiverDist(availableRisks, action, beta);
-    return alpha * receiverDist.score(closeness) + comfortUtility(availableRisks[action]);
+    var receiverDist = getReceiverDist(available, action, rBeta);
+    return alpha * receiverDist.score(closeness) + comfortUtility(available[action]);
   }, actions); 
   
   var exp_utilities = map(function(x){return Math.exp(beta * x)}, utilities)
@@ -95,23 +74,121 @@ var commActor = function(alpha, beta, scenario, closeness, unavailable){
   return Categorical({ps: softMaxes, vs: actions})
 }
 
-print(commActor(1, 1, scenarios[0], 3, "mid"))
-
-editor.put("commActor", commActor)
-
-var scenarios = editor.get("scenarios")
-var commActor = editor.get("commActor")
-
-var makeCommReceiverModel = function(risks, alpha, beta, unavailable, f){return function(){
+// Make a Communicative Receiver Model
+var makeCommReceiverModel = function(risks, alpha, beta, rBeta, unavailable, f){return function(){
   var cs = Categorical({ps: [0.25, 0.25, 0.25, 0.25], vs: [1, 2, 3, 4]})
   var closeness = sample(cs)
-  var actions_probs = commActor(alpha, beta, risks, closeness, unavailable)
+  var actions_probs = commActor(alpha, beta, rBeta, risks, closeness, unavailable)
   f(closeness, actions_probs)
 }}
 
-var dist = Infer({method: "enumerate"}, makeCommReceiverModel(scenarios[0], 0.9, 1.2, 0, function(closeness, actions_probs){
-  condition(sample(actions_probs) == 1)
-  return closeness
-}));
+// Get a Communitive Receiver distribution
+var getCommReceiverDist = function(risks, observed, alpha, beta, rBeta, unavailable){
+  return Infer({method: "enumerate"}, makeCommReceiverModel(risks, alpha, beta, rBeta, unavailable, function(closeness, actions_probs){
+    condition(sample(actions_probs) == observed)
+    return closeness
+  }));
+}
 
-viz(dist, {xLabel: "Closeness", yLabel: "P(Closeness | Action = 1)"})
+// Null model
+var nullModel = function(){
+  var cs = Categorical({ps: [0.25, 0.25, 0.25, 0.25], vs: [1, 2, 3, 4]})
+  var closeness = sample(cs)
+  return closeness
+}
+
+// Null model distribution
+var getNullDist = function(){return Infer({method: "enumerate"}, nullModel);}
+
+// Get closenesses judgments for RCSA 2 choice
+var getClosenessesRCSA2 = function(soFar, nextScenarios, beta){
+  if(nextScenarios.length == 0){
+    return soFar
+  }
+  
+  let nextScenario = nextScenarios[0]
+  let low = nextScenario[0]; let mid = nextScenario[1]; let high = nextScenario[2];
+  
+  let lmdist = getReceiverDist([low, mid], 0, beta)
+  soFar.lm.push([low, expectation(lmdist)])
+  
+  let mldist = getReceiverDist([low, mid], 1, beta)
+  soFar.ml.push([mid, expectation(mldist)])
+  
+  let lhdist = getReceiverDist([low, high], 0, beta)
+  soFar.lh.push([low, expectation(lhdist)])
+  
+  let hldist = getReceiverDist([low, high], 1, beta)
+  soFar.hl.push([high, expectation(hldist)])
+  
+  let mhdist = getReceiverDist([mid, high], 0, beta)
+  soFar.mh.push([mid, expectation(mhdist)])
+  
+  let hmdist = getReceiverDist([mid, high], 1, beta)
+  soFar.hm.push([high, expectation(hmdist)])
+  
+  return getClosenessesRCSA2(soFar, nextScenarios.slice(1), beta)
+}
+
+// Example of generating closenesses
+getClosenessesRCSA2({lm: [], ml: [], lh: [], hl: [], mh: [], hm: []}, scenarios, 1.8)
+
+// Get closenesses judgments for RCSA 3 choice
+var getClosenessesRCSA3 = function(soFar, nextScenarios, beta){
+  if(nextScenarios.length == 0){
+    return soFar
+  }
+  
+  let nextScenario = nextScenarios[0]
+  let low = nextScenario[0]; let mid = nextScenario[1]; let high = nextScenario[2];
+  
+  let lmdist = getReceiverDist([low, mid, high], 0, beta)
+  soFar.lm.push([low, expectation(lmdist)])
+  
+  let mldist = getReceiverDist([low, mid, high], 1, beta)
+  soFar.ml.push([mid, expectation(mldist)])
+  
+  let lhdist = getReceiverDist([low, mid, high], 0, beta)
+  soFar.lh.push([low, expectation(lhdist)])
+  
+  let hldist = getReceiverDist([low, mid, high], 2, beta)
+  soFar.hl.push([high, expectation(hldist)])
+  
+  let mhdist = getReceiverDist([low, mid, high], 1, beta)
+  soFar.mh.push([mid, expectation(mhdist)])
+  
+  let hmdist = getReceiverDist([low, mid, high], 2, beta)
+  soFar.hm.push([high, expectation(hmdist)])
+  
+  return getClosenessesRCSA3(soFar, nextScenarios.slice(1), beta)
+}
+
+// Get closeness judgments for communicative receiver
+var getClosenessesCR = function(soFar, nextScenarios, alpha, beta, rBeta){
+  if(nextScenarios.length == 0){
+    return soFar
+  }
+  
+  let nextScenario = nextScenarios[0]
+  let low = nextScenario[0]; let mid = nextScenario[1]; let high = nextScenario[2];
+  
+  let lmdist = getCommReceiverDist([low, mid, high], 0, alpha, beta, rBeta, 2)
+  soFar.lm.push([low, expectation(lmdist)])
+  
+  let mldist = getCommReceiverDist([low, mid, high], 1, alpha, beta, rBeta, 2)
+  soFar.ml.push([mid, expectation(mldist)])
+  
+  let lhdist = getCommReceiverDist([low, mid, high], 0, alpha, beta, rBeta, 1)
+  soFar.lh.push([low, expectation(lhdist)])
+  
+  let hldist = getCommReceiverDist([low, mid, high], 1, alpha, beta, rBeta, 1)
+  soFar.hl.push([high, expectation(hldist)])
+  
+  let mhdist = getCommReceiverDist([low, mid, high], 0, alpha, beta, rBeta, 0)
+  soFar.mh.push([mid, expectation(mhdist)])
+  
+  let hmdist = getCommReceiverDist([low, mid, high], 1, alpha, beta, rBeta, 0)
+  soFar.hm.push([high, expectation(hmdist)])
+  
+  return getClosenessesCR(soFar, nextScenarios.slice(1), alpha, beta, rBeta)
+}
